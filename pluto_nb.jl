@@ -20,15 +20,12 @@ begin
 	    "PlotlyJS"
 	])
 	
-	using Markdown
-	using InteractiveUtils
 	using Images
 	using Plots
 	plotly()
 	using Distributions
 	using StaticArrays
 	using Random
-	using Serialization
 	using NearestNeighbors
 	using JSON
 	using PlotlyJS
@@ -70,20 +67,29 @@ function test_data(n)
 	return (image, json)
 end
 
+# ╔═╡ d638f4a2-c1d9-4e3a-b206-9c5622669ae7
+struct BoxData
+	label::String
+	text::String
+	image::Matrix
+	box::Vector
+	ids::Vector
+end
+
 # ╔═╡ c38cc8b0-26b0-41a4-a957-38f447f6c471
-function box(image, annotation)#::(String, String, Matrix, Array)
+function box(image, annotation)::BoxData
 	n = annotation["box"]
 	local i
 	try
 		i = image[n[2]:n[4],n[1]:n[3]]
 	catch _
-		i = []
+		i = zeros(0,0)
 	end
-	return (annotation["label"], annotation["text"], i, n, annotation["linking"])
+	return BoxData(annotation["label"], annotation["text"], i, n, annotation["linking"])
 end
 
 # ╔═╡ 6613d8ec-ab7e-4ac9-b92a-e0c1b674e84c
-function boxes(data)#::Vector{Tuple{String, String, Matrix{Gray{N0f8}}, Vector{Any}}}
+function boxes(data)::Vector{BoxData}
 	image = data[1]
 	json = data[2]
 
@@ -110,21 +116,21 @@ Since the questions make up around 44% of the data, just betting on that is pret
 begin
 	# How often specific strings occur for a label type	
 	frequency = Dict("question"=>0.0, "answer"=>0, "header"=>0, "other"=>0)
-	avg_size = Dict("question"=>[0,0,0], "answer"=>[0,0,0], "header"=>[0,0,0], "other"=>[0,0,0])
-	avg_pos = Dict("question"=>[0,0,0], "answer"=>[0,0,0], "header"=>[0,0,0], "other"=>[0,0,0])
+	#avg_size = Dict("question"=>[0,0,0], "answer"=>[0,0,0], "header"=>[0,0,0], "other"=>[0,0,0])
+	#avg_pos = Dict("question"=>[0,0,0], "answer"=>[0,0,0], "header"=>[0,0,0], "other"=>[0,0,0])
 	question_char = Dict(""=>0)
 	
 	for td in 1:length(IDs)
 		for box in boxes(trainig_data(td))
-			frequency[box[1]]+=1
-			if box[1] == "question" && box[2] != ""
-				idx = string(box[2][end])
+			frequency[box.label] += 1
+			if box.label == "question" && box.text != ""
+				idx = string(box.text[end])
 				old = get!(question_char, idx, 0)
 				question_char[idx] = old+1
 			end
 	
-			avg_size[box[1]] += [box[4][3]-box[4][1], box[4][4]-box[4][2],1]
-			avg_pos[box[1]] += [box[4][1], box[4][2], 1]
+			#avg_size[box.label] += [box[4][3]-box[4][1], box[4][4]-box[4][2],1]
+			#avg_pos[box.label] += [box[4][1], box[4][2], 1]
 		end
 	end
 	
@@ -156,10 +162,10 @@ The bayes classifier uses a weighted combination of a Gausian (for the continous
 """
 
 # ╔═╡ f79d8474-e0a8-49b0-9e0b-93ec573240d4
-struct BayesClass
+mutable struct BayesClass
 	words::Dict{String, UInt64}
-	locations::Array{Array{UInt64}}
-	sizes::Array{Array{UInt64}}
+	locations::Matrix{Float64}
+	sizes::Matrix{Float64}
 end
 
 # ╔═╡ 58d4f627-0232-40b5-8481-0953c81278b0
@@ -180,23 +186,29 @@ function tokenize(text_::String)::Array{String}
 end
 
 # ╔═╡ 716729de-bd39-44e0-9408-740ffd3522fe
-tokenize("ok boomer:")
+tokenize("ok boomer: ok ok")
 
 # ╔═╡ 299a5e01-fd3c-4dba-ad08-b41ca2ae0a3f
 begin
 	bayes_table::Dict{String, BayesClass} = Dict()
 	for label in labels
-		get!(bayes_table, label, BayesClass(Dict(),[],[]))
+		get!(bayes_table, label, BayesClass(Dict(),zeros(2,0),zeros(2,0)))
 	end
 
 	for td in 1:length(IDs)
 		for box in boxes(trainig_data(td))
-			push!(bayes_table[box[1]].locations, box[4][1:2])
-			push!(bayes_table[box[1]].sizes, abs.(box[4][1:2]-box[4][3:4]))
+			#push!(bayes_table[box[1]].locations, Float64.(box[4][1:2]))
+			#push!(bayes_table[box[1]].sizes, Float64.(abs.(box[4][1:2]-box[4][3:4])))
 			
-			for word in tokenize(box[2])
-				bay = get!(bayes_table[box[1]].words, word, 0)
-				bayes_table[box[1]].words[word] = bay + 1
+			bayes_table[box.label].locations =
+			[bayes_table[box.label].locations Float64.(box.box[1:2])]
+
+			bayes_table[box.label].sizes =
+			[bayes_table[box.label].sizes Float64.(abs.(box.box[1:2]-box.box[3:4]))]
+			
+			for word in tokenize(box.text)
+				bay = get!(bayes_table[box.label].words, word, 0)
+				bayes_table[box.label].words[word] = bay + 1
 			end
 		end
 	end
@@ -210,20 +222,25 @@ function naive_bayes(text::String, box::Array{Any})::Label
 	pc::Array{Float64} = [frequency[l] for l in labels]
 	size = abs.(box[1:2]-box[3:4])
 	p::Array{Float64} = zeros(4)
-	
-	for l in 1:length(p)
-		sizes_x = fit(Normal, [p[1] for p in bayes_table[labels[l]].sizes])
-		sizes_y = fit(Normal, [p[2] for p in bayes_table[labels[l]].sizes])
-		poses_x = fit(Normal, [p[1] for p in bayes_table[labels[l]].locations])
-		poses_y = fit(Normal, [p[2] for p in bayes_table[labels[l]].locations])
 
+	for l in 1:length(p)
+		sizes_x = fit(Normal, bayes_table[labels[l]].sizes[1,:])
+		sizes_y = fit(Normal, bayes_table[labels[l]].sizes[2,:])
+		poses_x = fit(Normal, bayes_table[labels[l]].locations[1,:])
+		poses_y = fit(Normal, bayes_table[labels[l]].locations[2,:])
+		
 		p[l] += (log(pdf(poses_x, box[1])) +
 			log(pdf(poses_y, box[2]))) * 0.7 +
 			(log(pdf(sizes_x, size[1])) +
 			log(pdf(sizes_y, size[2]))) * 0.3
+
+		#sizes = fit(MvNormal, bayes_table[labels[l]].sizes)
+		#poses = fit(MvNormal, bayes_table[labels[l]].locations)
+
+		#p[l] += log(pdf(poses, Float64.(box[1:2]))) * 0.7
+		#p[l] += log(pdf(poses, Float64.(size[1:2]))) * 0.3
 	end
-		
-	
+
 	for word in tokenize(text)
 		pw =
 			log(sum([get(bayes_table[labels[l]].words, word, 0)+1 for l in 1:length(p)])) -
@@ -231,7 +248,12 @@ function naive_bayes(text::String, box::Array{Any})::Label
 		
 		for l in 1:length(p)
 			p[l] += log(get(bayes_table[labels[l]].words, word, 0)+1) - log(sum(values(bayes_table[labels[l]].words))+1) + log(pc[l]) - pw
+			# ==
+			# p(l|t) = p(t|l) * p(l) / p(t)
+			# Hvor p(l) er sandsyneligheden for et label forekommer,
+			# mens p(t) er sandsyneligheden for en teken forekommer.
 		end
+
 	end
 	
 	return p
@@ -239,19 +261,19 @@ end
 
 # ╔═╡ ed2d9c77-ed76-4391-b0e5-681b4c2faa54
 begin
-	local bacc = 0
-	local biter = 0
+	local acc = 0
+	local iter = 0
 
 	for td in 1:length(test_IDs)
 		for box in boxes(test_data(td))
-			biter+=1
-			if labels[argmax(naive_bayes(box[2], box[4]))] == box[1]
-				bacc+=1
+			iter+=1
+			if labels[argmax(naive_bayes(box.text, box.box))] == box.label
+				acc+=1
 			end
 		end
 	end
 
-	local accuracy = bacc*100/biter
+	local accuracy = acc*100/iter
 	println("The Bayes classifier has a $accuracy% on test set")
 end
 
@@ -269,8 +291,8 @@ struct Sibling
 end
 
 # ╔═╡ 8daad32e-35c1-4ffd-92b5-5bba9748736b
-struct Box{T}
-	data::Tuple{String, String, T, Vector{Any}, Vector{Any}}
+struct Box
+	data::BoxData
 	siblings::Array{Sibling}
 	bayes_label::Label
 end
@@ -304,17 +326,17 @@ The `train_page` function builds a graph of a PDF page, from the training data, 
 """
 
 # ╔═╡ 0c3b9ab8-5aa7-4fce-acb2-3761f1dc8650
-function train_page(data::Vector{Tuple{String, String, T, Vector{Any}, Vector{Any}}}; test::Bool=true)::Array{Box} where T
+function train_page(data::Vector{BoxData}; test::Bool=true)::Array{Box}
 	bayes_labels = if test
-		bayes_labels = [softmax(naive_bayes(dp[2], dp[4])) for dp in data]
+		bayes_labels = [softmax(naive_bayes(dp.text, dp.box)) for dp in data]
 	else
-		[target(dp[1]) for dp in data]
+		[target(dp.label) for dp in data]
 	end
 
 	[begin
 		sibs::Array{Sibling} = [
-			Sibling(if dp2[4] != dp[4]
-				shortest_distance(dp2[4], dp[4])
+			Sibling(if dp2.box != dp.box
+				shortest_distance(dp2.box, dp.box)
 			else
 				[Inf, Inf]
 			end, i)
@@ -354,14 +376,14 @@ function embedding(page::Vector{Box}, box_id::Int64)::Embedding
 		sib_data[j,:] = softmax(ℯ.^sib_data[j,:])
 	end
 	
-	vcat(collect(flatten(vcat(sib_data))), softmax(naive_bayes(box.data[2], box.data[4])) * 0.2)
+	vcat(collect(flatten(vcat(sib_data))), softmax(naive_bayes(box.data.text, box.data.box)) * 0.2)
 end
 
 # ╔═╡ 22932754-adb1-4a11-810a-59e72980d16a
 md"""
 # KNN
 
-Firs I build the KNN model...
+Firs I build the KNN model. Originially I wrote the KNN implementations myself. But I wanted to try using this library, to see if it would be faster, as it allows for more efficient data structures for storing the training data.
 """
 
 # ╔═╡ 4a462f59-57d1-4b63-a281-1a82bf250e54
@@ -374,7 +396,7 @@ begin
 	    for box in 1:length(page)
 	        input = vcat(embedding(page, box))
 	        push!(knn_data, input)
-	        push!(knn_labels, target(page[box[1]].data[1]))
+	        push!(knn_labels, target(page[box[1]].data.label))
 	    end
 	end
 	
@@ -398,7 +420,7 @@ begin
 	
 	        s = knn(kdtree, test_dp, 10, true)
 	        sorted = [knn_labels[a]/b for (a,b) in zip(s[1], s[2])]
-	        if argmax(sum(sorted)) == argmax(target(page[box].data[1]))
+	        if argmax(sum(sorted)) == argmax(target(page[box].data.label))
 	            acc+=1
 	        end
 	    end
@@ -413,6 +435,7 @@ end
 # ╠═d17f94c7-ead8-4eeb-ac7f-2cde8f057dcc
 # ╠═2c38bdd6-771f-476e-af1f-1126a82b73dd
 # ╠═b934f159-6f29-4add-a5e4-23cbdb4bf5ed
+# ╠═d638f4a2-c1d9-4e3a-b206-9c5622669ae7
 # ╠═c38cc8b0-26b0-41a4-a957-38f447f6c471
 # ╠═6613d8ec-ab7e-4ac9-b92a-e0c1b674e84c
 # ╟─a496ba66-d72e-45bf-a431-cb06024bb939
