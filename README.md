@@ -1,6 +1,6 @@
 # DSV Recruitment assignment
 This is a solution to the DSV datascience recruitment assignment.
-The objective of the assignment is described in [https://github.com/unic0rn9k/dsv_recruitment/blob/master/Final%20Data%20Science%20and%20MLOps%20-%20Test%20Case.docx](Final Data Science and MLOps - Test Case.docx).
+The objective of the assignment is described in `Final Data Science and MLOps - Test Case.docx`.
 
 ## Solution
 - The solution to the data structures and algorithms part, is written in rust, and is located in `src/main.rs`.
